@@ -1,5 +1,5 @@
 [package]
-name = "brainfuck-jit-in-rust"
+name = "brainfuck"
 version = "0.1.0"
 authors = ["m-shaka <buddha0818@gmail.com>"]
 edition = "2018"
