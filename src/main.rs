@@ -22,6 +22,7 @@ pub fn parse(filepath: &String) -> Vec<char> {
     res
 }
 
+#[derive(Debug)]
 enum BfOpKind {
     IncPtr,
     DecPtr,
@@ -36,9 +37,49 @@ enum BfOpKind {
     JumpIfDataNotZero,
 }
 
+#[derive(Debug)]
 struct BfOp {
-    kind: BfOpKind,
-    argument: usize,
+    pub kind: BfOpKind,
+    pub argument: usize,
+}
+
+fn translate(insts: &[char]) -> Vec<BfOp> {
+    let mut res: Vec<BfOp> = vec![];
+    let mut loopStack: Vec<usize> = vec![];
+    let mut pc: usize = 0;
+    let program_size = insts.len();
+    while pc < program_size {
+        let inst = insts[pc];
+        match inst {
+            '[' => {
+                pc += 1;
+            }
+            ']' => {
+                pc += 1;
+            }
+            _ => {
+                let num_repeats = insts[pc..insts.len()]
+                    .iter()
+                    .take_while(|&&c| c == inst)
+                    .count();
+                pc += num_repeats;
+                let kind = match inst {
+                    '>' => BfOpKind::IncPtr,
+                    '<' => BfOpKind::DecPtr,
+                    '+' => BfOpKind::IncData,
+                    '-' => BfOpKind::DecData,
+                    ',' => BfOpKind::ReadStdin,
+                    '.' => BfOpKind::WriteStdout,
+                    _ => panic!("Invalid token"),
+                };
+                res.push(BfOp {
+                    kind,
+                    argument: num_repeats,
+                })
+            }
+        }
+    }
+    res
 }
 
 struct MachineCode {
@@ -91,8 +132,9 @@ fn execute(code: &Vec<u8>) {
 }
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    for c in parse(&args[1]) {
-        println!("{}", c);
+    let insts = parse(&args[1]);
+    for bf_op in translate(&insts) {
+        println!("{:?}", bf_op);
     }
     return ();
     let mut code = MachineCode::new();
