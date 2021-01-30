@@ -216,7 +216,7 @@ impl MachineCode {
 
 fn compile(ops: &[BfOp]) -> MachineCode {
     let mut code = MachineCode::new();
-    let memory: *mut u8 = unsafe { mem::transmute(libc::malloc(30000)) };
+    let memory: *mut u8 = unsafe { mem::transmute(libc::malloc(500000)) };
     code.emit_bytes(&[0x49, 0xBD]);
     code.emit_u64(memory as u64);
 
@@ -265,6 +265,48 @@ fn compile(ops: &[BfOp]) -> MachineCode {
                     0x0F, 0x05, //
                 ])
             }
+            BfOpKind::LoopSetToZero => code.emit_bytes(&[0x41, 0xC6, 0x45, 0x00, 0x00]),
+            BfOpKind::LoopMovePtr => {
+                code.emit_bytes(&[
+                    0x41, 0x80, 0x7d, 0x00, 0x00, //
+                    0x0F, 0x84, //
+                ]);
+                code.emit_u32(0x12);
+                if op.argument >= 0 {
+                    code.emit_bytes(&[0x49, 0x81, 0xc5]);
+                    code.emit_u32(op.argument as u32);
+                } else {
+                    code.emit_bytes(&[0x49, 0x81, 0xed]);
+                    code.emit_u32(-op.argument as u32);
+                }
+                code.emit_bytes(&[
+                    0x41, 0x80, 0x7d, 0x00, 0x00, //
+                    0x0f, 0x85, //
+                ]);
+                code.emit_u32(0xffffffee);
+            }
+            BfOpKind::LoopMoveData => {
+                // skip if data is zero
+                code.emit_bytes(&[
+                    0x41, 0x80, 0x7d, 0x00, 0x00, //
+                    0x0F, 0x84, //
+                ]);
+                code.emit_u32(23);
+
+                code.emit_bytes(&[0x4d, 0x89, 0xee]);
+                if op.argument >= 0 {
+                    code.emit_bytes(&[0x49, 0x81, 0xc6]);
+                    code.emit_u32(op.argument as u32);
+                } else {
+                    code.emit_bytes(&[0x49, 0x81, 0xee]);
+                    code.emit_u32(-op.argument as u32);
+                }
+                code.emit_bytes(&[
+                    0x49, 0x0f, 0xb6, 0x45, 0x0, //
+                    0x41, 0x00, 0x06, //
+                    0x41, 0xC6, 0x45, 0x00, 0x00, //
+                ]);
+            }
             BfOpKind::JumpIfDataZero => {
                 code.emit_bytes(&[0x41, 0x80, 0x7d, 0x00, 0x00]);
                 bracket_stack.push(code.len());
@@ -274,13 +316,14 @@ fn compile(ops: &[BfOp]) -> MachineCode {
             BfOpKind::JumpIfDataNotZero => {
                 let bracket_offset = bracket_stack.pop().expect("mismatch [");
                 code.emit_bytes(&[0x41, 0x80, 0x7d, 0x00, 0x00]);
-                let offset_back = (bracket_offset as i32 - code.len() as i32) as u32;
+                let jump_back_from = (code.len() + 6) as i32;
+                let jump_back_to = bracket_offset as i32 + 6;
+                let offset_back = (jump_back_to - jump_back_from) as u32;
                 code.emit_bytes(&[0x0F, 0x85]);
                 code.emit_u32(offset_back);
-                let offset_back = code.len() - bracket_offset + 6;
+                let offset_back = code.len() as i32 - jump_back_to;
                 code.replace_u32(bracket_offset + 2, bracket_offset + 6, offset_back as u32)
             }
-            _ => {}
         }
     }
     code.emit_byte(0xc3);
