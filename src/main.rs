@@ -173,6 +173,9 @@ impl MachineCode {
     pub fn new() -> Self {
         Self { content: vec![] }
     }
+    pub fn emit_byte(&mut self, b: u8) {
+        self.content.push(b);
+    }
 
     pub fn emit_bytes(&mut self, bs: &[u8]) {
         self.content.append(&mut bs.to_vec());
@@ -197,6 +200,15 @@ impl MachineCode {
     }
 }
 
+fn compile(ops: &[BfOp]) -> MachineCode {
+    let mut code = MachineCode::new();
+    let memory: *mut u8 = unsafe { mem::transmute(libc::malloc(30000)) };
+    code.emit_bytes(&[0x49, 0xBD]);
+    code.emit_u64(memory as u64);
+    code.emit_byte(0xc3);
+    code
+}
+
 fn execute(code: &Vec<u8>) {
     unsafe {
         let page = libc::mmap(
@@ -216,16 +228,10 @@ fn execute(code: &Vec<u8>) {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let insts = parse(&args[1]);
-    for bf_op in translate(&insts) {
-        println!("{:?}", bf_op);
+    let ops = translate(&insts);
+    let code = compile(&ops);
+    for c in code.get() {
+        println!("{:x?}", *c);
     }
-    return ();
-    let mut code = MachineCode::new();
-    code.emit_bytes(&[
-        0x48, 0xC7, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x48, 0xC7, 0xC7, 0x00, 0x00, 0x00, 0x00, 0x4C,
-        0x89, 0xEE, 0x48, 0xC7, 0xC2, 0x01, 0x00, 0x00, 0x00, 0x0F, 0x05, 0x48, 0xC7, 0xC0, 0x01,
-        0x00, 0x00, 0x00, 0x48, 0xC7, 0xC7, 0x01, 0x00, 0x00, 0x00, 0x4C, 0x89, 0xEE, 0x48, 0xC7,
-        0xC2, 0x01, 0x00, 0x00, 0x00, 0x0F, 0x05, 0xc3,
-    ]);
     execute(code.get())
 }
