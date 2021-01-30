@@ -3,8 +3,6 @@ extern crate libc;
 use std::io::{BufRead, BufReader};
 use std::mem;
 
-const MASK: u8 = 0xFF;
-
 const TOKENS: &str = "><+-.,[]";
 
 pub fn parse(filepath: &String) -> Vec<char> {
@@ -182,21 +180,37 @@ impl MachineCode {
     }
 
     pub fn emit_u16(&mut self, n: u16) {
-        self.emit_bytes(&[n as u8 & MASK, (n >> 8) as u8 & MASK])
+        self.emit_bytes(&[n as u8 & 0xFF, (n >> 8) as u8 & 0xFF])
     }
 
     pub fn emit_u32(&mut self, n: u32) {
-        self.emit_u16((n & MASK as u32) as u16);
-        self.emit_u16((n >> 16 & MASK as u32) as u16);
+        self.emit_u16((n & 0xFFFF as u32) as u16);
+        self.emit_u16((n >> 16 & 0xFFFF as u32) as u16);
     }
 
     pub fn emit_u64(&mut self, n: u64) {
-        self.emit_u32((n & MASK as u64) as u32);
-        self.emit_u32((n >> 32 & MASK as u64) as u32);
+        self.emit_u32((n & 0xFFFFFFFF as u64) as u32);
+        self.emit_u32((n >> 32 & 0xFFFFFFFF as u64) as u32);
+    }
+
+    pub fn replace_u32(&mut self, start: usize, end: usize, n: u32) {
+        self.content.splice(
+            start..end,
+            vec![
+                (n & 0xFFFFFFFF) as u8,
+                (n >> 8 & 0xFFFFFFFF) as u8,
+                (n >> 16 & 0xFFFFFFFF) as u8,
+                (n >> 24 & 0xFFFFFFFF) as u8,
+            ],
+        );
     }
 
     pub fn get(&self) -> &Vec<u8> {
         &self.content
+    }
+
+    pub fn len(&self) -> usize {
+        self.content.len()
     }
 }
 
@@ -205,6 +219,70 @@ fn compile(ops: &[BfOp]) -> MachineCode {
     let memory: *mut u8 = unsafe { mem::transmute(libc::malloc(30000)) };
     code.emit_bytes(&[0x49, 0xBD]);
     code.emit_u64(memory as u64);
+
+    let mut bracket_stack: Vec<usize> = vec![];
+    for op in ops {
+        match op.kind {
+            BfOpKind::IncPtr => {
+                code.emit_bytes(&[0x49, 0x81, 0xc5]);
+                code.emit_u32(op.argument as u32);
+            }
+            BfOpKind::DecPtr => {
+                code.emit_bytes(&[0x49, 0x81, 0xed]);
+                code.emit_u32(op.argument as u32);
+            }
+            BfOpKind::IncData => {
+                if op.argument < 256 {
+                    code.emit_bytes(&[0x41, 0x80, 0x45, 0x00, op.argument as u8])
+                } else if op.argument < 65536 {
+                    code.emit_bytes(&[0x66, 0x41, 0x81, 0x45, 0x00]);
+                    code.emit_u16(op.argument as u16);
+                }
+            }
+            BfOpKind::DecData => {
+                if op.argument < 256 {
+                    code.emit_bytes(&[0x41, 0x80, 0x6d, 0x00, op.argument as u8])
+                } else if op.argument < 65536 {
+                    code.emit_bytes(&[0x66, 0x41, 0x81, 0x6d, 0x00]);
+                    code.emit_u16(op.argument as u16);
+                }
+            }
+            BfOpKind::WriteStdout => {
+                code.emit_bytes(&[
+                    0x48, 0xC7, 0xC0, 0x01, 0x00, 0x00, 0x00, //
+                    0x48, 0xC7, 0xC7, 0x01, 0x00, 0x00, 0x00, //
+                    0x4C, 0x89, 0xEE, //
+                    0x48, 0xC7, 0xC2, 0x01, 0x00, 0x00, 0x00, //
+                    0x0F, 0x05,
+                ])
+            }
+            BfOpKind::ReadStdin => {
+                code.emit_bytes(&[
+                    0x48, 0xC7, 0xC0, 0x00, 0x00, 0x00, 0x00, //
+                    0x48, 0xC7, 0xC7, 0x00, 0x00, 0x00, 0x00, //
+                    0x4C, 0x89, 0xEE, //
+                    0x48, 0xC7, 0xC2, 0x01, 0x00, 0x00, 0x00, //
+                    0x0F, 0x05, //
+                ])
+            }
+            BfOpKind::JumpIfDataZero => {
+                code.emit_bytes(&[0x41, 0x80, 0x7d, 0x00, 0x00]);
+                bracket_stack.push(code.len());
+                code.emit_bytes(&[0x0F, 0x84]);
+                code.emit_u32(0);
+            }
+            BfOpKind::JumpIfDataNotZero => {
+                let bracket_offset = bracket_stack.pop().expect("mismatch [");
+                code.emit_bytes(&[0x41, 0x80, 0x7d, 0x00, 0x00]);
+                let offset_back = (bracket_offset as i32 - code.len() as i32) as u32;
+                code.emit_bytes(&[0x0F, 0x85]);
+                code.emit_u32(offset_back);
+                let offset_back = code.len() - bracket_offset + 6;
+                code.replace_u32(bracket_offset + 2, bracket_offset + 6, offset_back as u32)
+            }
+            _ => {}
+        }
+    }
     code.emit_byte(0xc3);
     code
 }
@@ -230,8 +308,5 @@ fn main() {
     let insts = parse(&args[1]);
     let ops = translate(&insts);
     let code = compile(&ops);
-    for c in code.get() {
-        println!("{:x?}", *c);
-    }
-    execute(code.get())
+    execute(code.get());
 }
